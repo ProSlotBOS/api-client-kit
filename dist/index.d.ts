@@ -34,7 +34,7 @@ interface ApiClient {
      * (e.g. POST /api/teams clears everything under /api/teams) and opens a
      * short window where matching GETs bypass the cache entirely.
      */
-    apiFetch<T = unknown>(path: string, options?: RequestInit): Promise<T>;
+    apiFetch<T = any>(path: string, options?: RequestInit): Promise<T>;
     /** Clear cached entries whose path starts with `path`, or everything if omitted. */
     clearCache(path?: string): void;
     /**

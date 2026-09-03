@@ -36,7 +36,7 @@ export interface ApiClient {
    * (e.g. POST /api/teams clears everything under /api/teams) and opens a
    * short window where matching GETs bypass the cache entirely.
    */
-  apiFetch<T = unknown>(path: string, options?: RequestInit): Promise<T>;
+  apiFetch<T = any>(path: string, options?: RequestInit): Promise<T>;
   /** Clear cached entries whose path starts with `path`, or everything if omitted. */
   clearCache(path?: string): void;
   /**
@@ -96,7 +96,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     cache.clear();
   }
 
-  async function apiFetch<T = unknown>(path: string, options?: RequestInit): Promise<T> {
+  async function apiFetch<T = any>(path: string, options?: RequestInit): Promise<T> {
     const cacheKey = `${impersonateEmail || ''}|${path}|${JSON.stringify(options?.body || '')}`;
     const isGet = !options?.method || options.method === 'GET';
 
