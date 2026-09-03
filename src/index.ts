@@ -64,16 +64,17 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
 
   /**
    * The `path` segment of a cache key. Keys are built as
-   * `${impersonateEmail}|${path}|${body}` — the leading impersonation
-   * prefix (empty string when nobody's impersonated, an email otherwise)
-   * means a key never literally starts with its own path, so matching has
-   * to isolate this segment rather than using key.startsWith(path) — that
-   * always returned false and was the whole bug.
+   * `${impersonateEmail}|${authFlag}|${path}|${body}` — two identity
+   * prefixes (impersonation and signed-in-or-not) come before path, so a
+   * key never literally starts with its own path. Matching has to isolate
+   * this segment rather than using key.startsWith(path) — that always
+   * returned false and was the whole original bug.
    */
   function cacheKeyPath(key: string): string {
     const first = key.indexOf('|');
     const second = key.indexOf('|', first + 1);
-    return key.slice(first + 1, second === -1 ? undefined : second);
+    const third = key.indexOf('|', second + 1);
+    return key.slice(second + 1, third === -1 ? undefined : third);
   }
 
   function clearCache(path?: string): void {
@@ -97,8 +98,15 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   }
 
   async function apiFetch<T = any>(path: string, options?: RequestInit): Promise<T> {
-    const cacheKey = `${impersonateEmail || ''}|${path}|${JSON.stringify(options?.body || '')}`;
     const isGet = !options?.method || options.method === 'GET';
+
+    // Fetched before the cache check, not just before the network call —
+    // a response fetched while signed out must never be handed back after
+    // the same tab signs in (or vice versa), so "is there a token" is part
+    // of the cache key.
+    const token = await getToken();
+    const authFlag = token ? 'auth' : 'anon';
+    const cacheKey = `${impersonateEmail || ''}|${authFlag}|${path}|${JSON.stringify(options?.body || '')}`;
 
     if (isGet) {
       const isBypassActive = [...recentMutations.entries()].some(
@@ -110,7 +118,6 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       }
     }
 
-    const token = await getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Organization-ID': orgId,

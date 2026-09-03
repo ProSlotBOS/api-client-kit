@@ -70,3 +70,17 @@ test('switching impersonated identity never serves another identity\'s cached re
   const asB = await client.apiFetch('/api/teams');
   assert.deepEqual(asB, { teams: ['coach-b-team'] }, 'must not reuse coach A\'s cached response');
 });
+
+test('a response fetched while signed out is never served after signing in', async () => {
+  let signedIn = false;
+  const { client, responses } = fakeFetchClient({ getIdToken: () => Promise.resolve(signedIn ? 'token' : null) });
+
+  responses.set('/api/teams', { teams: ['public-view'] });
+  const anon = await client.apiFetch('/api/teams');
+  assert.deepEqual(anon, { teams: ['public-view'] });
+
+  signedIn = true;
+  responses.set('/api/teams', { teams: ['my-team'] });
+  const authed = await client.apiFetch('/api/teams');
+  assert.deepEqual(authed, { teams: ['my-team'] }, 'must not reuse the signed-out cache entry');
+});

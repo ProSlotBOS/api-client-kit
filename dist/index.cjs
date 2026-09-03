@@ -33,7 +33,8 @@ function createApiClient(config) {
   function cacheKeyPath(key) {
     const first = key.indexOf("|");
     const second = key.indexOf("|", first + 1);
-    return key.slice(first + 1, second === -1 ? void 0 : second);
+    const third = key.indexOf("|", second + 1);
+    return key.slice(second + 1, third === -1 ? void 0 : third);
   }
   function clearCache(path) {
     if (path) {
@@ -52,8 +53,10 @@ function createApiClient(config) {
     cache.clear();
   }
   async function apiFetch(path, options) {
-    const cacheKey = `${impersonateEmail || ""}|${path}|${JSON.stringify(options?.body || "")}`;
     const isGet = !options?.method || options.method === "GET";
+    const token = await getToken();
+    const authFlag = token ? "auth" : "anon";
+    const cacheKey = `${impersonateEmail || ""}|${authFlag}|${path}|${JSON.stringify(options?.body || "")}`;
     if (isGet) {
       const isBypassActive = [...recentMutations.entries()].some(
         ([prefix, ts]) => path.startsWith(prefix) && Date.now() - ts < MUTATION_BYPASS_WINDOW
@@ -63,7 +66,6 @@ function createApiClient(config) {
         if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
       }
     }
-    const token = await getToken();
     const headers = {
       "Content-Type": "application/json",
       "X-Organization-ID": orgId,

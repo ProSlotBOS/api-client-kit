@@ -1,6 +1,6 @@
 {
   "name": "@proslotbosllc/api-client-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared satellite-site API client — cached, org-scoped fetch to proslot-api with correct cache invalidation and identity-scoped caching for staff impersonation (X-Impersonate-Email).",
   "license": "UNLICENSED",
   "private": false,
