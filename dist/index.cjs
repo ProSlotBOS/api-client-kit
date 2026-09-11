@@ -36,6 +36,18 @@ function createApiClient(config) {
     const third = key.indexOf("|", second + 1);
     return key.slice(second + 1, third === -1 ? void 0 : third);
   }
+  function mutatedCollectionPaths(path) {
+    const query = path.indexOf("?");
+    const clean = query === -1 ? path : path.slice(0, query);
+    const parts = clean.split("/").filter(Boolean);
+    if (parts[0] !== "api") return [`/${parts.slice(0, 2).join("/")}`];
+    const paths = [];
+    for (let i = 1; i < parts.length; i += 2) {
+      const collection = `/api/${parts[i]}`;
+      if (!paths.includes(collection)) paths.push(collection);
+    }
+    return paths.length > 0 ? paths : [clean];
+  }
   function clearCache(path) {
     if (path) {
       for (const key of cache.keys()) {
@@ -99,8 +111,7 @@ function createApiClient(config) {
     if (isGet) {
       cache.set(cacheKey, { data, ts: Date.now() });
     } else {
-      const basePath = path.split("/").slice(0, 3).join("/");
-      clearCache(basePath);
+      for (const basePath of mutatedCollectionPaths(path)) clearCache(basePath);
     }
     return data;
   }

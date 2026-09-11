@@ -84,3 +84,57 @@ test('a response fetched while signed out is never served after signing in', asy
   const authed = await client.apiFetch('/api/teams');
   assert.deepEqual(authed, { teams: ['my-team'] }, 'must not reuse the signed-out cache entry');
 });
+
+// A nested mutation writes to two collections. Linking a team to a club
+// (`POST /api/sports-orgs/{orgId}/teams/{teamId}`) sets sportsOrgId on the TEAM
+// document, but only `/api/sports-orgs` was being invalidated — so the club
+// editor's refetched team list still showed the team as unlinked for five
+// minutes, and linking a team looked like it had silently done nothing.
+test('a nested mutation invalidates the nested collection too, not just the outer one', async () => {
+  const { client, responses } = fakeFetchClient();
+  responses.set('/api/teams', { teams: [{ id: 't1', sportsOrgId: null }] });
+  await client.apiFetch('/api/teams');
+
+  await client.apiFetch('/api/sports-orgs/o1/teams/t1', { method: 'POST', body: '{}' });
+
+  responses.set('/api/teams', { teams: [{ id: 't1', sportsOrgId: 'o1' }] });
+  const after = await client.apiFetch('/api/teams');
+  assert.equal(after.teams[0].sportsOrgId, 'o1', 'the team list must reflect the link that was just made');
+});
+
+test('a nested mutation still invalidates the outer collection', async () => {
+  const { client, responses } = fakeFetchClient();
+  responses.set('/api/sports-orgs', { orgs: ['before'] });
+  await client.apiFetch('/api/sports-orgs');
+
+  await client.apiFetch('/api/sports-orgs/o1/teams/t1', { method: 'POST', body: '{}' });
+
+  responses.set('/api/sports-orgs', { orgs: ['after'] });
+  const after = await client.apiFetch('/api/sports-orgs');
+  assert.deepEqual(after.orgs, ['after']);
+});
+
+test('an unrelated collection is left cached', async () => {
+  const { client, responses, callCount } = fakeFetchClient();
+  responses.set('/api/tournaments', { events: ['cached'] });
+  await client.apiFetch('/api/tournaments');
+  const callsAfterFirst = callCount();
+
+  await client.apiFetch('/api/sports-orgs/o1/teams/t1', { method: 'POST', body: '{}' });
+
+  responses.set('/api/tournaments', { events: ['fresh'] });
+  const again = await client.apiFetch('/api/tournaments');
+  assert.deepEqual(again.events, ['cached'], 'unrelated caches must survive');
+  assert.equal(callCount(), callsAfterFirst + 1, 'only the mutation itself hit the network');
+});
+
+test('a query string on the mutation path does not confuse the collection walk', async () => {
+  const { client, responses } = fakeFetchClient();
+  responses.set('/api/teams', { teams: ['before'] });
+  await client.apiFetch('/api/teams');
+
+  await client.apiFetch('/api/sports-orgs/o1/teams/t1?applyLogo=true', { method: 'DELETE' });
+
+  responses.set('/api/teams', { teams: ['after'] });
+  assert.deepEqual((await client.apiFetch('/api/teams')).teams, ['after']);
+});

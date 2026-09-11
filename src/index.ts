@@ -77,6 +77,30 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     return key.slice(second + 1, third === -1 ? undefined : third);
   }
 
+  /**
+   * Every collection path a mutation touches, outermost first.
+   *
+   *   /api/teams/t1                    -> ['/api/teams']
+   *   /api/sports-orgs/o1/teams/t1     -> ['/api/sports-orgs', '/api/teams']
+   *
+   * A nested collection is looked up at its own top-level route elsewhere
+   * (`GET /api/teams`), so its cache has to be cleared under that name rather
+   * than under the nested path it was written through.
+   */
+  function mutatedCollectionPaths(path: string): string[] {
+    const query = path.indexOf('?');
+    const clean = query === -1 ? path : path.slice(0, query);
+    const parts = clean.split('/').filter(Boolean); // ['api','sports-orgs','o1','teams','t1']
+    if (parts[0] !== 'api') return [`/${parts.slice(0, 2).join('/')}`];
+
+    const paths: string[] = [];
+    for (let i = 1; i < parts.length; i += 2) {
+      const collection = `/api/${parts[i]}`;
+      if (!paths.includes(collection)) paths.push(collection);
+    }
+    return paths.length > 0 ? paths : [clean];
+  }
+
   function clearCache(path?: string): void {
     if (path) {
       for (const key of cache.keys()) {
@@ -157,9 +181,16 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     if (isGet) {
       cache.set(cacheKey, { data, ts: Date.now() });
     } else {
-      // e.g. /api/sports-orgs/123 -> /api/sports-orgs
-      const basePath = path.split('/').slice(0, 3).join('/');
-      clearCache(basePath);
+      // A mutation invalidates every collection its path names, not just the
+      // first one. `/api/sports-orgs/{id}/teams/{id}` writes to the club AND to
+      // the team document, so clearing only `/api/sports-orgs` left a five
+      // minute stale `/api/teams` behind it: linking a team to a club appeared
+      // to do nothing, because the refetched team list still showed the team
+      // as unlinked.
+      //
+      // Path segments alternate collection/id, so the collections are the
+      // even-indexed segments after the `/api` prefix.
+      for (const basePath of mutatedCollectionPaths(path)) clearCache(basePath);
     }
     return data as T;
   }
