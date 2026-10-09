@@ -87,6 +87,7 @@ function createApiClient(config) {
     const separator = path.includes("?") ? "&" : "?";
     const fetchPath = `${path}${separator}organizationId=${orgId}`;
     const res = await fetch(`${apiBase}${fetchPath}`, {
+      ...token ? { cache: "no-store" } : {},
       ...options,
       headers: { ...headers, ...options?.headers }
     });

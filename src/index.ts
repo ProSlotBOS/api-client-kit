@@ -152,7 +152,15 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     const separator = path.includes('?') ? '&' : '?';
     const fetchPath = `${path}${separator}organizationId=${orgId}`;
 
+    // A signed-in request is never answered from the browser's HTTP cache. The
+    // API's public GETs allow stale-while-revalidate, and a browser that had
+    // just fetched one anonymously (a public page, the sign-in shell) handed
+    // that body to the signed-in request for the same URL a moment later,
+    // revalidating in the background. ECYB, 5-8 Oct 2026: the admin page held
+    // the public event list, with no umpire emails on it. The API now varies
+    // its answers on Authorization too; this keeps every site safe regardless.
     const res = await fetch(`${apiBase}${fetchPath}`, {
+      ...(token ? { cache: 'no-store' as RequestCache } : {}),
       ...options,
       headers: { ...headers, ...options?.headers },
     });
