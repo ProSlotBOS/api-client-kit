@@ -1,0 +1,49 @@
+# Every release of this kit gets a version tag (vX.Y.Z), so sites can pin
+# github:ProSlotBOS/<repo>#semver:^X.Y.Z and the BOS Platform kits tab can
+# compare versions instead of counting commits.
+#
+# On each push to main: if package.json's version has no tag yet, tag it.
+# If it is already released and what the package ships has changed since
+# that tag, fail: bump the version (npm version patch|minor|major) so the
+# change is visible to every site that uses the kit.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag a new version, or require one
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            # What consumers receive: package.json's "files" (plus package.json), else everything but docs and CI.
+            paths=$(node -e "const p=require('./package.json'); console.log([...(p.files||[]), 'package.json'].join('\n'))")
+            if node -e "process.exit(require('./package.json').files ? 0 : 1)"; then
+              changed=$(git diff --name-only "${tag}" HEAD -- $paths)
+            else
+              changed=$(git diff --name-only "${tag}" HEAD -- . ':(exclude)*.md' ':(exclude).github/**' ':(exclude)docs/**')
+            fi
+            if [ -n "${changed}" ]; then
+              echo "::error::${tag} is already released, and what this kit ships has changed since. Bump the version (npm version patch, minor or major) and push again."
+              echo "${changed}" | head -20
+              exit 1
+            fi
+            echo "${tag} is already released; nothing new to tag."
+          else
+            git tag "${tag}"
+            git push origin "${tag}"
+            echo "Released ${tag}"
+          fi
