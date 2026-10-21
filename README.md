@@ -84,11 +84,17 @@ before the cleared entry would have been refetched anyway.
 
 ## Refusals are shown, not reported
 
-When the API says no for a reason the person can act on ("Every division
-needs a name", "Blackout submissions are locked"), the site should say so
-under the form and log a warning. Logging it with `console.error` makes Tracer
-report the rule working as a crash, and a third of the Tracer queue was that
-(Aug-Oct 2026).
+When the API says no for a reason only the person can fix ("Every division
+needs a name"), the site should say so under the form and log a warning:
+logging it with `console.error` makes Tracer report the rule working as a
+crash.
+
+Use it per call site, not everywhere. In the Tracer queue for Aug-Oct 2026
+most refusals logged as errors were real defects that surfaced as a refusal
+(a permission check that was wrong, a stale family id, a payment race), and
+only a few were the rule working. The SDK reports only 403 and 5xx by itself,
+so a refusal silenced here is invisible unless it is a 403. Save League on the
+league sites is the one adopter so far.
 
 `apiFetch` throws an `ApiRefusal` for a 4xx whose JSON body carries a message.
 It stays a plain `Error`, still reported, for every 5xx, every 401 (a session

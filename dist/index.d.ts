@@ -48,9 +48,15 @@ interface ApiClient {
 /**
  * The API saying no, for a reason the person on the screen can act on: "Every
  * division needs a name", "Blackout submissions are locked", "Not authorized
- * to edit this team". It is the rule working, not the site breaking, so it is
- * shown to them and logged as a warning — Tracer captures console.error as a
- * crash, and a third of its queue was these (Aug-Oct 2026).
+ * to edit this team". When it is the rule working, not the site breaking, it is
+ * shown to them and logged as a warning (logApiFailure) — Tracer captures
+ * console.error as a crash.
+ *
+ * Use logApiFailure only where a refusal can only be the person's to fix, like
+ * a form the API validates and the screen does not. In the Tracer queue for
+ * Aug-Oct 2026 most refusals logged as errors were real defects that surfaced
+ * as one (a permission check, a stale family id, a payment race), so the
+ * default is still to report. The SDK reports only 403 and 5xx on its own.
  *
  * Thrown by apiFetch for a 4xx whose JSON body carries a message. Everything
  * else stays a plain Error and keeps being reported:
