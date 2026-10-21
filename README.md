@@ -72,11 +72,43 @@ separately from the real admin's.
 | `config.cacheTtlMs` | How long a GET stays cached. Default 5 minutes. |
 | `config.mutationBypassWindowMs` | How long GETs bypass the cache after a matching mutation. Default 30s. |
 
+| `ApiRefusal` | What `apiFetch` throws for a 4xx that carries a reason (see below). Has `message`, `status`, `code`. |
+| `isApiRefusal(err)` | True for an `ApiRefusal`. |
+| `logApiFailure(context, err)` | Logs a refusal with `console.warn` and returns its message; logs anything else with `console.error` and returns `null`. |
+
 `apiFetch(path, options?)` — GET by default, cached; any other method
 clears the cache for that path's base (`/api/teams/123` → `/api/teams`)
 and opens `mutationBypassWindowMs` where matching GETs skip the cache
 outright, so the very next read after a mutation is always fresh even
 before the cleared entry would have been refetched anyway.
+
+## Refusals are shown, not reported
+
+When the API says no for a reason the person can act on ("Every division
+needs a name", "Blackout submissions are locked"), the site should say so
+under the form and log a warning. Logging it with `console.error` makes Tracer
+report the rule working as a crash, and a third of the Tracer queue was that
+(Aug-Oct 2026).
+
+`apiFetch` throws an `ApiRefusal` for a 4xx whose JSON body carries a message.
+It stays a plain `Error`, still reported, for every 5xx, every 401 (a session
+the API didn't accept is how a broken sign-in shows up), the API's catch-all
+`Endpoint not found` 404, and a 4xx with no message or only "Forbidden". The
+Tracer SDK reports every 403 by endpoint on its own, so a wrong permission is
+still seen once even when the screen explains it.
+
+```ts
+import { logApiFailure } from '@proslotbosllc/api-client-kit';
+
+try {
+  await api.updateTournament(id, payload);
+} catch (err) {
+  setSaveError(logApiFailure('Failed to save league', err) ?? 'The league could not be saved. Please try again.');
+}
+```
+
+`err.message` and `err.status` are what they were before, so existing
+handlers keep working.
 
 ## Developing
 

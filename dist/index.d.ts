@@ -45,6 +45,51 @@ interface ApiClient {
      */
     setImpersonationEmail(email: string | null): void;
 }
+/**
+ * The API saying no, for a reason the person on the screen can act on: "Every
+ * division needs a name", "Blackout submissions are locked", "Not authorized
+ * to edit this team". It is the rule working, not the site breaking, so it is
+ * shown to them and logged as a warning — Tracer captures console.error as a
+ * crash, and a third of its queue was these (Aug-Oct 2026).
+ *
+ * Thrown by apiFetch for a 4xx whose JSON body carries a message. Everything
+ * else stays a plain Error and keeps being reported:
+ *   - any 5xx;
+ *   - a 4xx with no message, or only an HTTP phrase ("Forbidden");
+ *   - every 401: a session the API did not accept is how a broken sign-in or
+ *     an auth gate mounted in front of a public route shows up (proslotbos,
+ *     Sept 2026: a public onboarding link answered "Link invalid or expired");
+ *   - the API's catch-all 404 ("Endpoint not found"): the site called a route
+ *     that does not exist.
+ * The SDK still reports every 403 by endpoint on its own, so a refusal the
+ * UI shows is never the only trace of a wrong permission.
+ *
+ * `status` is what the plain Error carried and `message` is the same `error`
+ * text, so callers that read err.message or err.status behave as before. The
+ * one difference: `{ error: "Forbidden", message: "You do not have access to
+ * this organization" }` reads as the second, which says why.
+ */
+declare class ApiRefusal extends Error {
+    readonly status: number;
+    /** The API's machine-readable reason (`code` or `reason`), when it gave one. */
+    readonly code: string | null;
+    readonly isApiRefusal = true;
+    constructor(message: string, status: number, code?: string | null);
+}
+/** True for an ApiRefusal, including one from another copy of this package. */
+declare function isApiRefusal(err: unknown): err is ApiRefusal;
+/**
+ * Log a failed call the standard way, and return what to show the person.
+ *
+ *   } catch (err) {
+ *     setSaveError(logApiFailure('Failed to save league', err) ?? 'The league could not be saved. Please try again.');
+ *   }
+ *
+ * A refusal is logged with console.warn and its message returned for the UI.
+ * Anything else is logged with console.error, which Tracer reports, and null is
+ * returned so the caller shows its own generic text.
+ */
+declare function logApiFailure(context: string, err: unknown): string | null;
 declare function createApiClient(config: ApiClientConfig): ApiClient;
 
-export { type ApiClient, type ApiClientConfig, createApiClient };
+export { type ApiClient, type ApiClientConfig, ApiRefusal, createApiClient, isApiRefusal, logApiFailure };

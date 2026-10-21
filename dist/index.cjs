@@ -20,9 +20,43 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/index.ts
 var src_exports = {};
 __export(src_exports, {
-  createApiClient: () => createApiClient
+  ApiRefusal: () => ApiRefusal,
+  createApiClient: () => createApiClient,
+  isApiRefusal: () => isApiRefusal,
+  logApiFailure: () => logApiFailure
 });
 module.exports = __toCommonJS(src_exports);
+var ApiRefusal = class extends Error {
+  constructor(message, status, code = null) {
+    super(message);
+    this.isApiRefusal = true;
+    this.name = "ApiRefusal";
+    this.status = status;
+    this.code = code;
+  }
+};
+function isApiRefusal(err) {
+  return Boolean(err && typeof err === "object" && err.isApiRefusal === true);
+}
+function logApiFailure(context, err) {
+  if (isApiRefusal(err)) {
+    console.warn(`${context}:`, err.message);
+    return err.message;
+  }
+  console.error(`${context}:`, err);
+  return null;
+}
+var HTTP_PHRASE = /^(bad request|unauthorized|forbidden|not found|method not allowed|conflict|unprocessable entity|too many requests)\.?$/i;
+function refusalFrom(status, body) {
+  if (status < 400 || status >= 500 || status === 401) return null;
+  if (!body || typeof body !== "object") return null;
+  const { error, message, code, reason } = body;
+  if (status === 404 && error === "Endpoint not found") return null;
+  const text = [error, message].find((v) => typeof v === "string" && v.trim() !== "" && !HTTP_PHRASE.test(v.trim()));
+  if (!text) return null;
+  const why = typeof code === "string" ? code : typeof reason === "string" ? reason : null;
+  return new ApiRefusal(text, status, why);
+}
 function createApiClient(config) {
   const { apiBase, orgId, getToken } = config;
   const CACHE_TTL = config.cacheTtlMs ?? 5 * 60 * 1e3;
@@ -93,16 +127,19 @@ function createApiClient(config) {
     });
     if (!res.ok) {
       let errorMsg = `API ${res.status}`;
+      let errJson = null;
       try {
         const errText = await res.text();
         try {
-          const errJson = JSON.parse(errText);
+          errJson = JSON.parse(errText);
           errorMsg = errJson.error || errJson.message || errText;
         } catch {
           errorMsg = errText || errorMsg;
         }
       } catch {
       }
+      const refusal = refusalFrom(res.status, errJson);
+      if (refusal) throw refusal;
       const error = new Error(errorMsg);
       error.status = res.status;
       throw error;
@@ -120,6 +157,9 @@ function createApiClient(config) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  createApiClient
+  ApiRefusal,
+  createApiClient,
+  isApiRefusal,
+  logApiFailure
 });
 //# sourceMappingURL=index.cjs.map
