@@ -15,18 +15,65 @@
  * silently no-op'd, so newly created records didn't appear until a hard
  * refresh reset the in-memory cache. See cacheKeyPath() below for the fix.
  */
+/** What apiFetch asks getToken for. */
+interface TokenRequest {
+    /** A new token from Firebase rather than the one it holds: the API refused the request as signed out. */
+    forceRefresh?: boolean;
+}
 interface ApiClientConfig {
     /** Base URL of the proslot-api backend, e.g. https://proslot-api-....run.app */
     apiBase: string;
     /** This site's organization id, sent as X-Organization-ID and ?organizationId=. */
     orgId: string;
-    /** Returns the signed-in user's Firebase ID token, or null if signed out. */
-    getToken: () => Promise<string | null>;
+    /**
+     * Returns the signed-in user's Firebase ID token, or null if signed out.
+     * After a 401 it is asked again with `{ forceRefresh: true }`, and the
+     * request goes once more with the new token. A getter that ignores the
+     * argument still works; firebaseTokenGetter honours it.
+     */
+    getToken: (request?: TokenRequest) => Promise<string | null>;
+    /**
+     * True while the site shows someone as signed in (for Firebase:
+     * `!!auth.currentUser`). It is what tells a sign-in that stopped working
+     * from a visitor who never signed in, so onSignInLost never fires for the
+     * second.
+     */
+    isSignedIn?: () => boolean;
+    /**
+     * The API refused a request as signed out, a fresh token did not help, and
+     * isSignedIn() says the person is signed in. Show them a way to sign in
+     * again; the screen they are on cannot load or save anything until they do.
+     */
+    onSignInLost?: () => void;
+    /** A signed-in request went through again after onSignInLost. */
+    onSignInRestored?: () => void;
     /** How long a GET response stays cached. Default 5 minutes. */
     cacheTtlMs?: number;
     /** How long GETs bypass the cache after a matching-prefix mutation. Default 30s. */
     mutationBypassWindowMs?: number;
 }
+/** The part of a Firebase user firebaseTokenGetter reads (`auth.currentUser`). */
+interface IdTokenSource {
+    getIdToken(forceRefresh?: boolean): Promise<string>;
+}
+/**
+ * getToken for a site signed in with Firebase Auth:
+ *
+ *   getToken: firebaseTokenGetter(() => auth.currentUser),
+ *
+ * Every league site carried its own getter that turned any getIdToken failure
+ * into null without a word, so the request went out signed out and the API
+ * refused it. Boys of Summer, 28 Oct 2026: an admin's tab left open overnight
+ * missed its hourly token refresh during a five-second network drop, and for
+ * the next ten minutes every signed-in call was refused, a game edit
+ * included, while the page still showed him signed in. Nothing recorded why
+ * the refresh failed.
+ *
+ * This one asks Firebase for a new token when the one it holds will not come,
+ * and when that fails too it logs Firebase's error code (never a token) as a
+ * warning, so the next reported error carries the reason in its console log.
+ */
+declare function firebaseTokenGetter(currentUser: () => IdTokenSource | null | undefined): (request?: TokenRequest) => Promise<string | null>;
 interface ApiClient {
     /**
      * Cached, org-scoped fetch. GETs are cached by (impersonated identity,
@@ -98,4 +145,4 @@ declare function isApiRefusal(err: unknown): err is ApiRefusal;
 declare function logApiFailure(context: string, err: unknown): string | null;
 declare function createApiClient(config: ApiClientConfig): ApiClient;
 
-export { type ApiClient, type ApiClientConfig, ApiRefusal, createApiClient, isApiRefusal, logApiFailure };
+export { type ApiClient, type ApiClientConfig, ApiRefusal, type IdTokenSource, type TokenRequest, createApiClient, firebaseTokenGetter, isApiRefusal, logApiFailure };

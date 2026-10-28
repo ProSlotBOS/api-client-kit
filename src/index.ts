@@ -16,17 +16,85 @@
  * refresh reset the in-memory cache. See cacheKeyPath() below for the fix.
  */
 
+/** What apiFetch asks getToken for. */
+export interface TokenRequest {
+  /** A new token from Firebase rather than the one it holds: the API refused the request as signed out. */
+  forceRefresh?: boolean;
+}
+
 export interface ApiClientConfig {
   /** Base URL of the proslot-api backend, e.g. https://proslot-api-....run.app */
   apiBase: string;
   /** This site's organization id, sent as X-Organization-ID and ?organizationId=. */
   orgId: string;
-  /** Returns the signed-in user's Firebase ID token, or null if signed out. */
-  getToken: () => Promise<string | null>;
+  /**
+   * Returns the signed-in user's Firebase ID token, or null if signed out.
+   * After a 401 it is asked again with `{ forceRefresh: true }`, and the
+   * request goes once more with the new token. A getter that ignores the
+   * argument still works; firebaseTokenGetter honours it.
+   */
+  getToken: (request?: TokenRequest) => Promise<string | null>;
+  /**
+   * True while the site shows someone as signed in (for Firebase:
+   * `!!auth.currentUser`). It is what tells a sign-in that stopped working
+   * from a visitor who never signed in, so onSignInLost never fires for the
+   * second.
+   */
+  isSignedIn?: () => boolean;
+  /**
+   * The API refused a request as signed out, a fresh token did not help, and
+   * isSignedIn() says the person is signed in. Show them a way to sign in
+   * again; the screen they are on cannot load or save anything until they do.
+   */
+  onSignInLost?: () => void;
+  /** A signed-in request went through again after onSignInLost. */
+  onSignInRestored?: () => void;
   /** How long a GET response stays cached. Default 5 minutes. */
   cacheTtlMs?: number;
   /** How long GETs bypass the cache after a matching-prefix mutation. Default 30s. */
   mutationBypassWindowMs?: number;
+}
+
+/** The part of a Firebase user firebaseTokenGetter reads (`auth.currentUser`). */
+export interface IdTokenSource {
+  getIdToken(forceRefresh?: boolean): Promise<string>;
+}
+
+/**
+ * getToken for a site signed in with Firebase Auth:
+ *
+ *   getToken: firebaseTokenGetter(() => auth.currentUser),
+ *
+ * Every league site carried its own getter that turned any getIdToken failure
+ * into null without a word, so the request went out signed out and the API
+ * refused it. Boys of Summer, 28 Oct 2026: an admin's tab left open overnight
+ * missed its hourly token refresh during a five-second network drop, and for
+ * the next ten minutes every signed-in call was refused, a game edit
+ * included, while the page still showed him signed in. Nothing recorded why
+ * the refresh failed.
+ *
+ * This one asks Firebase for a new token when the one it holds will not come,
+ * and when that fails too it logs Firebase's error code (never a token) as a
+ * warning, so the next reported error carries the reason in its console log.
+ */
+export function firebaseTokenGetter(
+  currentUser: () => IdTokenSource | null | undefined,
+): (request?: TokenRequest) => Promise<string | null> {
+  return async (request) => {
+    const user = currentUser();
+    if (!user) return null;
+    try {
+      return await user.getIdToken(request?.forceRefresh === true);
+    } catch {
+      try {
+        return await user.getIdToken(true);
+      } catch (err) {
+        const code = err && typeof (err as { code?: unknown }).code === 'string' ? (err as { code: string }).code : 'unknown';
+        console.warn(`[api-client] The sign-in could not be refreshed (${code}); this request goes out signed out.`);
+        return null;
+      }
+    }
+  };
 }
 
 export interface ApiClient {
@@ -145,6 +213,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   const cache = new Map<string, CacheEntry>();
   const recentMutations = new Map<string, number>();
   let impersonateEmail: string | null = null;
+  let signInLost = false;
 
   /**
    * The `path` segment of a cache key. Keys are built as
@@ -212,26 +281,19 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     // a response fetched while signed out must never be handed back after
     // the same tab signs in (or vice versa), so "is there a token" is part
     // of the cache key.
-    const token = await getToken();
-    const authFlag = token ? 'auth' : 'anon';
-    const cacheKey = `${impersonateEmail || ''}|${authFlag}|${path}|${JSON.stringify(options?.body || '')}`;
+    let token = await getToken();
+    const cacheKeyFor = (bearer: string | null) =>
+      `${impersonateEmail || ''}|${bearer ? 'auth' : 'anon'}|${path}|${JSON.stringify(options?.body || '')}`;
 
     if (isGet) {
       const isBypassActive = [...recentMutations.entries()].some(
         ([prefix, ts]) => path.startsWith(prefix) && Date.now() - ts < MUTATION_BYPASS_WINDOW
       );
       if (!isBypassActive) {
-        const cached = cache.get(cacheKey);
+        const cached = cache.get(cacheKeyFor(token));
         if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data as T;
       }
     }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-Organization-ID': orgId,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(impersonateEmail ? { 'X-Impersonate-Email': impersonateEmail } : {}),
-    };
 
     const separator = path.includes('?') ? '&' : '?';
     const fetchPath = `${path}${separator}organizationId=${orgId}`;
@@ -243,11 +305,40 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     // revalidating in the background. ECYB, 5-8 Oct 2026: the admin page held
     // the public event list, with no umpire emails on it. The API now varies
     // its answers on Authorization too; this keeps every site safe regardless.
-    const res = await fetch(`${apiBase}${fetchPath}`, {
-      ...(token ? { cache: 'no-store' as RequestCache } : {}),
+    const send = (bearer: string | null) => fetch(`${apiBase}${fetchPath}`, {
+      ...(bearer ? { cache: 'no-store' as RequestCache } : {}),
       ...options,
-      headers: { ...headers, ...options?.headers },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Organization-ID': orgId,
+        ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+        ...(impersonateEmail ? { 'X-Impersonate-Email': impersonateEmail } : {}),
+        ...options?.headers,
+      },
     });
+
+    let res = await send(token);
+
+    // A 401 is how a lapsed sign-in shows up: a token that expired in a tab
+    // that slept through its refresh, or none at all because the refresh
+    // failed (see firebaseTokenGetter). Ask for a new token and send once
+    // more. Resending is safe for a write too: the API checks the sign-in
+    // before a route runs, so a 401 means nothing was done.
+    if (res.status === 401) {
+      const fresh = await getToken({ forceRefresh: true });
+      if (fresh && fresh !== token) {
+        token = fresh;
+        res = await send(token);
+      }
+      if (res.status === 401 && !signInLost && config.isSignedIn?.()) {
+        signInLost = true;
+        config.onSignInLost?.();
+      }
+    }
+    if (res.ok && token && signInLost) {
+      signInLost = false;
+      config.onSignInRestored?.();
+    }
 
     if (!res.ok) {
       let errorMsg = `API ${res.status}`;
@@ -274,7 +365,9 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
 
     const data = await res.json();
     if (isGet) {
-      cache.set(cacheKey, { data, ts: Date.now() });
+      // Keyed by the token this answer was fetched with, which a retry may
+      // have changed: a signed-in answer must never land under the signed-out key.
+      cache.set(cacheKeyFor(token), { data, ts: Date.now() });
     } else {
       // A mutation invalidates every collection its path names, not just the
       // first one. `/api/sports-orgs/{id}/teams/{id}` writes to the club AND to

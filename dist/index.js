@@ -1,4 +1,21 @@
 // src/index.ts
+function firebaseTokenGetter(currentUser) {
+  return async (request) => {
+    const user = currentUser();
+    if (!user) return null;
+    try {
+      return await user.getIdToken(request?.forceRefresh === true);
+    } catch {
+      try {
+        return await user.getIdToken(true);
+      } catch (err) {
+        const code = err && typeof err.code === "string" ? err.code : "unknown";
+        console.warn(`[api-client] The sign-in could not be refreshed (${code}); this request goes out signed out.`);
+        return null;
+      }
+    }
+  };
+}
 var ApiRefusal = class extends Error {
   constructor(message, status, code = null) {
     super(message);
@@ -37,6 +54,7 @@ function createApiClient(config) {
   const cache = /* @__PURE__ */ new Map();
   const recentMutations = /* @__PURE__ */ new Map();
   let impersonateEmail = null;
+  let signInLost = false;
   function cacheKeyPath(key) {
     const first = key.indexOf("|");
     const second = key.indexOf("|", first + 1);
@@ -73,31 +91,46 @@ function createApiClient(config) {
   }
   async function apiFetch(path, options) {
     const isGet = !options?.method || options.method === "GET";
-    const token = await getToken();
-    const authFlag = token ? "auth" : "anon";
-    const cacheKey = `${impersonateEmail || ""}|${authFlag}|${path}|${JSON.stringify(options?.body || "")}`;
+    let token = await getToken();
+    const cacheKeyFor = (bearer) => `${impersonateEmail || ""}|${bearer ? "auth" : "anon"}|${path}|${JSON.stringify(options?.body || "")}`;
     if (isGet) {
       const isBypassActive = [...recentMutations.entries()].some(
         ([prefix, ts]) => path.startsWith(prefix) && Date.now() - ts < MUTATION_BYPASS_WINDOW
       );
       if (!isBypassActive) {
-        const cached = cache.get(cacheKey);
+        const cached = cache.get(cacheKeyFor(token));
         if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
       }
     }
-    const headers = {
-      "Content-Type": "application/json",
-      "X-Organization-ID": orgId,
-      ...token ? { Authorization: `Bearer ${token}` } : {},
-      ...impersonateEmail ? { "X-Impersonate-Email": impersonateEmail } : {}
-    };
     const separator = path.includes("?") ? "&" : "?";
     const fetchPath = `${path}${separator}organizationId=${orgId}`;
-    const res = await fetch(`${apiBase}${fetchPath}`, {
-      ...token ? { cache: "no-store" } : {},
+    const send = (bearer) => fetch(`${apiBase}${fetchPath}`, {
+      ...bearer ? { cache: "no-store" } : {},
       ...options,
-      headers: { ...headers, ...options?.headers }
+      headers: {
+        "Content-Type": "application/json",
+        "X-Organization-ID": orgId,
+        ...bearer ? { Authorization: `Bearer ${bearer}` } : {},
+        ...impersonateEmail ? { "X-Impersonate-Email": impersonateEmail } : {},
+        ...options?.headers
+      }
     });
+    let res = await send(token);
+    if (res.status === 401) {
+      const fresh = await getToken({ forceRefresh: true });
+      if (fresh && fresh !== token) {
+        token = fresh;
+        res = await send(token);
+      }
+      if (res.status === 401 && !signInLost && config.isSignedIn?.()) {
+        signInLost = true;
+        config.onSignInLost?.();
+      }
+    }
+    if (res.ok && token && signInLost) {
+      signInLost = false;
+      config.onSignInRestored?.();
+    }
     if (!res.ok) {
       let errorMsg = `API ${res.status}`;
       let errJson = null;
@@ -120,7 +153,7 @@ function createApiClient(config) {
     if (res.status === 204) return {};
     const data = await res.json();
     if (isGet) {
-      cache.set(cacheKey, { data, ts: Date.now() });
+      cache.set(cacheKeyFor(token), { data, ts: Date.now() });
     } else {
       for (const basePath of mutatedCollectionPaths(path)) clearCache(basePath);
     }
@@ -131,6 +164,7 @@ function createApiClient(config) {
 export {
   ApiRefusal,
   createApiClient,
+  firebaseTokenGetter,
   isApiRefusal,
   logApiFailure
 };

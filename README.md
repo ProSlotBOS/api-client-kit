@@ -41,9 +41,10 @@ export const ORG_ID = 'your-org-id';
 const client = createApiClient({
   apiBase: API_BASE,
   orgId: ORG_ID,
-  getToken: async () => {
-    try { return (await auth.currentUser?.getIdToken()) || null; } catch { return null; }
-  },
+  getToken: firebaseTokenGetter(() => auth.currentUser),
+  isSignedIn: () => !!auth.currentUser,
+  onSignInLost: reportSignInLost,         // @proslotbosllc/sso-kit
+  onSignInRestored: clearSignInLost,      // @proslotbosllc/sso-kit
 });
 
 export const { apiFetch, clearCache, setImpersonationEmail } = client;
@@ -68,7 +69,11 @@ separately from the real admin's.
 | `createApiClient(config)` | Returns `{ apiFetch, clearCache, setImpersonationEmail }` bound to one org/API base/token source. |
 | `config.apiBase` | Base URL of `proslot-api`. |
 | `config.orgId` | Sent as `X-Organization-ID` and `?organizationId=` on every request. |
-| `config.getToken` | `() => Promise<string \| null>` — the signed-in user's Firebase ID token. |
+| `config.getToken` | `(request?) => Promise<string \| null>` — the signed-in user's Firebase ID token. Asked again with `{ forceRefresh: true }` after a 401. |
+| `config.isSignedIn` | `() => boolean` — whether the site shows someone as signed in. |
+| `config.onSignInLost` | Called once when a signed-in person's requests keep being refused as signed out (see below). |
+| `config.onSignInRestored` | Called when a signed-in request goes through again after that. |
+| `firebaseTokenGetter(currentUser)` | The `getToken` for a Firebase site: honours `forceRefresh`, retries a failed token once, logs Firebase's error code when it cannot get one. |
 | `config.cacheTtlMs` | How long a GET stays cached. Default 5 minutes. |
 | `config.mutationBypassWindowMs` | How long GETs bypass the cache after a matching mutation. Default 30s. |
 
@@ -116,11 +121,36 @@ try {
 `err.message` and `err.status` are what they were before, so existing
 handlers keep working.
 
+## Sign-ins that lapse
+
+A Firebase ID token lasts an hour and is refreshed in the background. A tab
+that sleeps through the refresh, or loses its network at that moment, can be
+left with no token. Every site's own getter turned that failure into `null`
+without a word, so the request went out signed out and the API refused it
+while the page still showed the person signed in. Boys of Summer, 28 Oct
+2026: an admin's tab left open overnight hit a five-second network drop at
+refresh time, and for ten minutes every signed-in call was refused, a game
+edit included.
+
+Now:
+
+- `apiFetch` answers a 401 by asking `getToken({ forceRefresh: true })` and
+  sending the request once more with the new token. The API checks the
+  sign-in before a route runs, so resending a write after a 401 does nothing
+  twice.
+- `firebaseTokenGetter` asks Firebase for a new token when the one it holds
+  will not come, and logs Firebase's error code (never the token) as a
+  warning when that fails too, so the next reported error carries the reason.
+- When the API still says signed out and `isSignedIn()` is true,
+  `onSignInLost` fires once. Wire it to the sso-kit's `reportSignInLost` and
+  mount its `SignInLostNotice`, which asks the person to sign in again. A
+  visitor who never signed in is never told anything.
+
 ## Developing
 
 ```bash
 npm install
 npm run build       # dist/ (ESM + CJS + types)
 npm run typecheck
-npm test             # regression tests for the cache-invalidation bug above
+npm test             # regression tests for the bugs above
 ```
