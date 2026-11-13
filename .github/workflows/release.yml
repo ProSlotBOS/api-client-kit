@@ -2,7 +2,7 @@
 # github:ProSlotBOS/<repo>#semver:^X.Y.Z and the BOS Platform kits tab can
 # compare versions instead of counting commits.
 #
-# On each push to main: if package.json's version has no tag yet, tag it.
+# On each push to main: build, test and check dist first; then if package.json's version has no tag yet, tag it.
 # If it is already released and what the package ships has changed since
 # that tag, fail: bump the version (npm version patch|minor|major) so the
 # change is visible to every site that uses the kit.
@@ -22,6 +22,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # Nothing is tagged unless the kit builds, its tests pass and the
+      # committed dist matches the source (sites pin the tag and get dist).
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm test
+      - run: git diff --exit-code -- dist || (echo "dist is stale - run npm run build and commit" && exit 1)
 
       - name: Tag a new version, or require one
         run: |
