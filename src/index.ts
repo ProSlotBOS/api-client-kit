@@ -5,7 +5,7 @@
  * satellite dashboard, with correct cache invalidation and identity-scoped
  * caching for staff impersonation ("Log In As").
  *
- * Extracted from Boys of Summer's src/lib/api.ts after a real production
+ * Extracted from a site's own API client after a real production
  * bug: adding an impersonation prefix to cache keys (so one impersonated
  * identity's cached responses could never leak into another's) broke
  * clearCache()'s matching for EVERY signed-in user, not just impersonated
@@ -67,11 +67,9 @@ export interface IdTokenSource {
  *
  * Every league site carried its own getter that turned any getIdToken failure
  * into null without a word, so the request went out signed out and the API
- * refused it. Boys of Summer, 28 Oct 2026: an admin's tab left open overnight
- * missed its hourly token refresh during a five-second network drop, and for
- * the next ten minutes every signed-in call was refused, a game edit
- * included, while the page still showed him signed in. Nothing recorded why
- * the refresh failed.
+ * refused it. A tab that misses its hourly token refresh during a short network
+ * drop then has every signed-in call refused while the page still shows the
+ * person signed in, and nothing records why the refresh failed.
  *
  * This one asks Firebase for a new token when the one it holds will not come,
  * and when that fails too it logs Firebase's error code (never a token) as a
@@ -302,8 +300,8 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     // API's public GETs allow stale-while-revalidate, and a browser that had
     // just fetched one anonymously (a public page, the sign-in shell) handed
     // that body to the signed-in request for the same URL a moment later,
-    // revalidating in the background. ECYB, 5-8 Oct 2026: the admin page held
-    // the public event list, with no umpire emails on it. The API now varies
+    // revalidating in the background, so an admin page could hold the public
+    // version of a list. The API now varies
     // its answers on Authorization too; this keeps every site safe regardless.
     const send = (bearer: string | null) => fetch(`${apiBase}${fetchPath}`, {
       ...(bearer ? { cache: 'no-store' as RequestCache } : {}),
